@@ -1,0 +1,1 @@
+# ESPHome-Config-for-localbytes-plug32
