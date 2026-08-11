@@ -1,0 +1,494 @@
+substitutions:
+  name: "localbytes-plug32"
+  friendly_name: "Localbytes Plug32"
+  main_icon: "power-socket-uk"  
+  version_number: "0.0.1"
+  device_comment: "ESPHome for LocalBytes Plug32"
+  wifi_min_auth: "WPA"
+  wifi_fast_connect: "false"
+  ipv6_enable: "true"
+  sensor_update_interval: "4s"
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  comment: "${device_comment}"
+  name_add_mac_suffix: true
+  min_version: 2026.7.4
+  project:
+    name: localbytes.localbytes-plug32
+    version: "${version_number}"
+  on_boot:      
+    - priority: 600 # Run after component initialization
+      then:
+      - lambda: |-
+          id(hlw8032_sensor).set_current_resistor(id(current_resistor));
+          id(hlw8032_sensor).set_voltage_divider(id(voltage_divider));
+    - priority: 250 # Run after WiFi initialization
+      then:
+        - if:
+            condition:
+              #Are we connected to the factory network?
+              - lambda: 'return (id(ssid).state == "LOCALBYTES_230");'
+              #TODO: Placeholder based on old calibration test may need to be updated.
+            then:
+              - switch.turn_on: relay
+              - logger.log:
+                  level: INFO
+                  format: "Factory Network Detected - Running Calibration Script"
+              - script.execute:
+                  id: factory_calibration  
+
+esp32:
+  board: esp32-c3-devkitm-1
+  flash_size: 4MB
+  variant: esp32c3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_BT_BLE_42_FEATURES_SUPPORTED: y
+      CONFIG_BT_BLE_50_FEATURES_SUPPORTED: n
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "10"
+
+globals:
+  - id: restore_mode
+    type: int
+    restore_value: true
+    initial_value: "0" # 0=Off, 1=On, 2=Restore    
+  - id: current_resistor    
+    type: float
+    restore_value: true
+    initial_value: "0.001"
+  - id: voltage_divider    
+    type: float
+    restore_value: true
+    initial_value: "1.72"
+  - id: total_energy
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+  - id: previous_energy_value
+    type: float
+    initial_value: '0.0'
+  - id: factory_calibration_test
+    type: bool
+    initial_value: "false"
+
+preferences:  
+  flash_write_interval: 5min
+  ##TODO: Set at 5min for testing purposes, Production value should be 15min.
+
+dashboard_import:
+  package_import_url: github://MichaelMKKelly/ESPHome-Config-for-localbytes-plug32/localbytes-plug32.yaml@main
+  ##TODO: PLACEHOLDER - MUST REPLACE
+
+factory_reset:
+  resets_required: 7
+  max_delay: 10s
+
+safe_mode:
+      
+logger:
+
+api:
+  actions:
+    - action: calibrate_plug      
+      variables:
+        current_resistor_calibration: bool
+        actual_current: float        
+        voltage_resistor_calibration: bool
+        actual_voltage: float
+      then:
+        script.execute:
+          id: calibrate_plug
+          calibrate_current_resistor: !lambda "return current_resistor_calibration;"
+          true_current: !lambda "return actual_current;"
+          calibrate_voltage_resistor: !lambda "return voltage_resistor_calibration;"
+          true_voltage: !lambda "return actual_voltage;"
+    - action: power_cycle_with_delay
+      variables:
+        delay_seconds: int
+      then:
+      - switch.turn_off: relay
+      - delay: !lambda "return (delay_seconds) * 1000;"
+      - switch.turn_on: relay
+    - action: force_update
+      then:
+        - update.perform: 
+            id: firmwareupdate
+            force_update: true
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+  verify_ssl: False
+  buffer_size_rx: 1024
+  buffer_size_tx: 1024
+  #TODO: These buffer sizes may have to be tweaked.
+
+update:
+  - platform: http_request
+    name: "LocalBytes Plug32"
+    id: firmwareupdate
+    source: https://example.com/updatemanifest.json
+    ##TODO: PLACEHOLDER - MUST REPLACE
+
+wifi:
+  ap:
+    ssid: "${friendly_name}"
+  min_auth_mode: "${wifi_min_auth}"
+  fast_connect: "${wifi_fast_connect}"
+
+network:
+  enable_ipv6: "${ipv6_enable}"
+
+captive_portal:
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+bluetooth_proxy:
+  active: true
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO03
+      ##TODO: PLACEHOLDER - MUST REPLACE
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Button"
+    disabled_by_default: true
+    on_click:
+      - max_length: 1s
+        then:
+          if:
+            condition:
+              switch.is_off: disable_button
+            then:
+              switch.toggle: relay
+      - min_length: 1.5s
+        max_length: 5s
+        then:
+          switch.toggle: disable_led
+      - min_length: 8s
+        max_length: 12s
+        then:
+          switch.toggle: disable_button
+
+switch:
+  - platform: gpio
+    name: "Switch"
+    pin: GPIO05
+    ##TODO: PLACEHOLDER - MUST REPLACE
+    id: relay
+    restore_mode: RESTORE_DEFAULT_OFF
+    icon: "mdi:${main_icon}"
+  - platform: template
+    name: "Disable LED"
+    id: disable_led
+    icon: "mdi:led-variant-off"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    on_turn_on:
+      - light.turn_off: led
+    on_turn_off:
+     - if:
+         condition:
+           switch.is_on: relay
+         then:
+           light.turn_on: led
+         else:
+           light.turn_off: led
+  - platform: template
+    name: "Disable Button"
+    id: disable_button
+    icon: "mdi:toggle-switch-off-outline"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+
+uart:
+  - id: hlw_uart
+    rx_pin: GPIO20
+    ##TODO: PLACEHOLDER - MUST REPLACE
+    baud_rate: 4800
+    parity: EVEN
+
+sensor:
+  - platform: hlw8032
+    id: hlw8032_sensor
+    uart_id: hlw_uart
+    voltage:
+      name: "Voltage"
+      id: voltage
+      unit_of_measurement: V
+      accuracy_decimals: 1
+      filters:
+        - throttle_average: "${sensor_update_interval}"
+    current:
+      name: "Current"
+      id: current
+      unit_of_measurement: A
+      accuracy_decimals: 1
+      filters:
+        - throttle_average: "${sensor_update_interval}"
+    power:
+      name: "Power"
+      id: power
+      unit_of_measurement: W
+      accuracy_decimals: 0
+      filters:
+        - throttle_average: "${sensor_update_interval}"
+    apparent_power:
+      name: "Apparent Power"
+      id: apparent_power
+      unit_of_measurement: VA
+      accuracy_decimals: 0
+      filters:
+        - throttle_average: "${sensor_update_interval}"
+      disabled_by_default: True
+    power_factor:
+      name: "Power Factor"
+      id: power_factor
+      filters:
+        - throttle_average: "${sensor_update_interval}"
+      disabled_by_default: True
+    
+  - platform: total_daily_energy
+    name: "Daily Energy"    
+    device_class: energy
+    state_class: total_increasing
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 2
+    power_id: power
+    restore: false
+    filters:
+      - multiply: 0.001
+    unit_of_measurement: kWh
+  - platform: integration
+    name: 'Energy Since Power on'
+    id: energy
+    sensor: power
+    time_unit: h    
+    state_class: total_increasing
+    device_class: energy
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 2
+    unit_of_measurement: kWh
+    filters:         
+      - multiply: 0.001
+    disabled_by_default: True
+    on_value:
+       then:
+         - lambda: |-             
+             id(total_energy) += (x - id(previous_energy_value));
+             id(previous_energy_value) = x;
+             id(total_energy_sensor).update();
+  - platform: template
+    name: "Total Energy"
+    id: total_energy_sensor
+    unit_of_measurement: kWh
+    state_class: total_increasing
+    device_class: energy
+    icon: mdi:lightning-bolt
+    accuracy_decimals: 2
+    lambda: |-
+      return id(total_energy);
+    update_interval: 60s
+
+number:
+  - platform: template
+    name: "Current Resistor Calibration"
+    id: current_resistor_calibration
+    icon: "mdi:current-ac"
+    min_value: 0
+    max_value: 1
+    step: 0.001
+    entity_category: diagnostic
+    mode: box
+    lambda: |-
+      return id(current_resistor);
+    set_action:
+      lambda: |-
+        id(current_resistor) = x;
+    disabled_by_default: True
+
+  - platform: template
+    name: "Voltage Divider Calibration"
+    id: voltage_divider_calibration
+    icon: "mdi:sine-wave"
+    min_value: 1
+    max_value: 3
+    step: 0.001
+    entity_category: diagnostic
+    mode: box
+    lambda: |-
+      return id(voltage_divider);
+    set_action:
+      lambda: |-
+        id(voltage_divider) = x;
+    disabled_by_default: True 
+
+light:
+  - platform: status_led
+    name: "Status LED"
+    id: led
+    disabled_by_default: true
+    internal: true
+    pin:
+      inverted: true
+      number: GPIO06
+      ##TODO: PLACEHOLDER - MUST REPLACE
+
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+    disabled_by_default: True
+  - platform: factory_reset
+    name: "Factory Reset"
+    entity_category: config
+    disabled_by_default: True
+  - platform: template
+    name: "Reset Total Energy"
+    entity_category: config
+    disabled_by_default: True
+    on_press:
+      then:
+        - lambda: |-            
+            id(total_energy) = 0.0;
+            id(previous_energy_value) = id(energy).state;
+            id(total_energy_sensor).update();
+
+text_sensor:
+  - platform: wifi_info
+    ssid:
+      name: "Connected SSID"
+      id: ssid
+      disabled_by_default: True
+    ip_address: 
+      name: "IP Address"
+      id: ip_address
+      disabled_by_default: True
+
+script:
+  - id: factory_calibration
+    then:
+      #Ensure pass/value value is set to false before running test      
+      - lambda: 'id(factory_calibration_test) = false;'
+      #Wait 4s to settle
+      - delay: 4s
+      #Check If values within expected tolerance
+      - if:
+          condition:
+            - lambda: 'return (id(voltage).get_raw_state() >= 220);'
+            - lambda: 'return (240 >= id(voltage).get_raw_state());'
+            - lambda: 'return (id(current).get_raw_state() >= 0.2);'
+            - lambda: 'return (0.6 >= id(current).get_raw_state());'
+          then:
+            - lambda: 'id(factory_calibration_test) = true;'          
+      #If check fails then call calibration script with calibration values
+      - if:
+          condition:
+            - lambda: 'return id(factory_calibration_test);'
+          then:
+            #If true then do nothing
+          else:
+            - script.execute:
+                id: calibrate_plug
+                calibrate_current_resistor: True        
+                true_current: 0.42
+                #TODO: Placeholder based on old calibration test may need to be updated.
+                calibrate_voltage_resistor: True
+                true_voltage: 230
+                #TODO: Placeholder based on old calibration test may need to be updated.
+            #Wait 4s to settle
+            - delay: 4s   
+            #Check If values within expected tolerance
+            - if:
+                condition:
+                  - lambda: 'return (id(voltage).get_raw_state() >= 220);'
+                  - lambda: 'return (240 >= id(voltage).get_raw_state());'
+                  - lambda: 'return (id(current).get_raw_state() >= 0.2);'
+                  - lambda: 'return (0.6 >= id(current).get_raw_state());'
+                then:
+                  - lambda: 'id(factory_calibration_test) = true;' 
+      #Finish or fail calibration based on test
+      - if:
+          condition:
+            - lambda: 'return id(factory_calibration_test);'
+          then:        
+            - logger.log:
+                level: INFO
+                format: "Plug calibration complete"
+            - switch.turn_off: relay
+            - light.turn_off: led
+          else:
+            - logger.log:
+                level: ERROR
+                format: "Plug calibration error"
+            - switch.turn_off: relay
+            - light.turn_on: led
+            - delay: 0.5s
+            - light.turn_off: led
+            - delay: 0.5s
+            - light.turn_on: led
+            - delay: 0.5s
+            - light.turn_off: led
+            - delay: 0.5s
+            - light.turn_on: led
+            - delay: 0.5s
+            - light.turn_off: led
+            - delay: 0.5s
+            - light.turn_on: led
+            - delay: 0.5s
+            - light.turn_off: led
+      
+  - id: calibrate_plug    
+    parameters: 
+        calibrate_current_resistor: bool
+        true_current: float        
+        calibrate_voltage_resistor: bool
+        true_voltage: float
+    then:
+      #Disable BLE scanning to free up CPU to ensure stable calibration
+      - esp32_ble_tracker.stop_scan:
+      - if:
+          condition:
+              - lambda: 'return calibrate_current_resistor == true;'
+              - lambda: 'return true_current != 0;'
+              - lambda: 'return isnan(true_current) == false;'
+              - lambda: 'return isblank(true_current) == false;'
+          then:
+              #Set the Resistor config to basic value to get raw data
+              - lambda: 'id(hlw8032_sensor).set_current_resistor(0.001);'              
+              #Wait 4s to settle
+              - delay: 4s
+              #Calculate the true resistor value and set it to the global
+              - lambda: 'id(current_resistor) = (0.001 * (id(current).get_raw_state() / true_current));'
+              #Set the newly set global to the sensor
+              - lambda: 'id(hlw8032_sensor).set_current_resistor(id(current_resistor));'
+      - if:
+          condition:              
+              - lambda: 'return calibrate_voltage_resistor == true;'
+              - lambda: 'return true_voltage != 0;'
+              - lambda: 'return isnan(true_voltage) == false;'
+              - lambda: 'return isblank(true_voltage) == false;'
+          then:
+              #Set the devider config to basic value to get raw data
+              - lambda: 'id(hlw8032_sensor).set_voltage_divider(1.0);'
+              #Wait 4s to settle
+              - delay: 4s
+              #Calculate the true devider value and set it to the global
+              - lambda: 'id(voltage_divider) = (id(voltage).get_raw_state() / true_voltage);'
+              #Set the newly set global to the sensor
+              - lambda: 'id(hlw8032_sensor).set_voltage_divider(id(voltage_divider));'    
+      #Restart BLE scanning now that calibration is complete
+      - esp32_ble_tracker.start_scan:
